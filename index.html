@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>DeepSeek Peak-Time Assistant</title>
+<style>
+  :root {
+    --bg: #0e1116; --card: #161b22; --border: #232a33;
+    --text: #e6edf3; --muted: #8b949e;
+    --green: #2ea043; --green-soft: #7ee2a8; --red: #f85149; --accent: #4da3ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 32px 20px 48px; }
+  header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 1.5rem; margin: 0; }
+  h1 span { color: var(--accent); }
+  .badges { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .badge {
+    font-size: .75rem; padding: 4px 10px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted); background: #1a2029;
+  }
+  .badge.live { color: #9ecbff; border-color: #2d5c8f; background: #12212f; }
+  button {
+    background: #212a35; color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 14px; font-size: .85rem; cursor: pointer;
+    font-family: inherit;
+  }
+  button:hover { background: #2a3542; }
+  button:disabled { opacity: .6; cursor: default; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px; margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: .8rem; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin: 0 0 12px; font-weight: 600;
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  }
+  .status { display: flex; align-items: center; gap: 16px; }
+  .status-dot { width: 14px; height: 14px; border-radius: 50%; flex: 0 0 auto; }
+  .status-dot.peak { background: var(--red); box-shadow: 0 0 12px var(--red); }
+  .status-dot.offpeak { background: var(--green); box-shadow: 0 0 12px var(--green); }
+  .status-title { font-size: 1.35rem; font-weight: 700; }
+  .status-sub { color: var(--muted); font-size: .9rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+  .clock { font-size: 2.6rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+  .countdown { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .small { font-size: .8rem; }
+  .windows .row {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 9px 0; border-bottom: 1px dashed var(--border);
+    font-size: .95rem; flex-wrap: wrap;
+  }
+  .windows .row:last-child { border-bottom: none; }
+  .windows .tag { font-weight: 600; white-space: nowrap; }
+  .windows .tag.offpeak { color: var(--green-soft); }
+  .windows .tag.peak { color: var(--red); }
+  .windows .range { font-variant-numeric: tabular-nums; }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  th {
+    color: var(--muted); font-weight: 600; font-size: .74rem;
+    text-transform: uppercase; letter-spacing: .04em; white-space: nowrap;
+  }
+  td:not(:first-child) { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  td.model { font-weight: 600; }
+  tr.offpeak { background: rgba(46, 160, 67, .07); }
+  td.tier.offpeak { color: var(--green-soft); }
+  td.tier.peak { color: var(--red); }
+  footer { margin-top: 8px; font-size: .8rem; }
+  a { color: var(--accent); }
+  .toast {
+    position: fixed; left: 50%; bottom: 24px;
+    transform: translateX(-50%) translateY(20px);
+    background: #212a35; border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 16px; font-size: .85rem; opacity: 0;
+    transition: opacity .25s, transform .25s; max-width: 90vw; z-index: 10;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <h1>DeepSeek <span>Peak-Time Assistant</span></h1>
+    <div class="badges">
+      <span id="sourceBadge" class="badge">Embedded snapshot</span>
+      <button id="refreshBtn" type="button">&#x27F3; Refresh live data</button>
+    </div>
+  </header>
+
+  <section class="card status" aria-live="polite">
+    <div class="status-dot" id="statusDot"></div>
+    <div>
+      <div class="status-title" id="statusTitle">&mdash;</div>
+      <div class="status-sub" id="statusSub">&mdash;</div>
+    </div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Current time <span class="muted small">(your local timezone)</span></h2>
+      <div id="clock" class="clock">--:--:--</div>
+      <div id="dateLine" class="muted small">&mdash;</div>
+      <div id="utcLine" class="muted small">&mdash;</div>
+    </section>
+    <section class="card">
+      <h2>Next switch <span class="muted small">(countdown)</span></h2>
+      <div id="countdown" class="countdown">&mdash;</div>
+      <div id="nextSwitch" class="muted small">&mdash;</div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Peak / off-peak windows <span class="muted small" id="tzLabel"></span></h2>
+    <div class="windows" id="windows">&mdash;</div>
+  </section>
+
+  <section class="card">
+    <h2>
+      Pricing
+      <span class="muted small">USD per 1M tokens &middot; <a id="srcLink" href="https://api-docs.deepseek.com/quick_start/pricing/" target="_blank" rel="noopener">api-docs.deepseek.com</a></span>
+    </h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Tier</th>
+            <th>Input (cache hit)</th>
+            <th>Input (cache miss)</th>
+            <th>Output</th>
+          </tr>
+        </thead>
+        <tbody id="priceBody"></tbody>
+      </table>
+    </div>
+    <p class="muted small" id="priceNote">&mdash;</p>
+  </section>
+
+  <footer class="muted">
+    Reads only the public pricing docs &mdash; no API key required. Data source:
+    <span id="footerSource">&mdash;</span>. Status is computed from the current UTC time; all displayed
+    times are converted to your browser's local timezone.
+  </footer>
+</main>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var PRICING_URL = 'https://api-docs.deepseek.com/quick_start/pricing/';
+
+  // ------------------------------------------------------------------ data
+  // Embedded snapshot of the pricing page (default source). Times are UTC.
+  // window.peak = list of PEAK windows; off-peak is the complement.
+  //   { s: 60, e: 240 }   = 01:00-04:00 UTC
+  //   { s: 360, e: 600 }  = 06:00-10:00 UTC
+  var EMBEDDED = {
+    window: { peak: [ { s: 60, e: 240 }, { s: 360, e: 600 } ] },
+    prices: [
+      { model: 'deepseek-v4-flash', tier: 'current',  cacheHit: 0.0028,  cacheMiss: 0.14,  output: 0.28  },
+      { model: 'deepseek-v4-flash', tier: 'off-peak', cacheHit: 0.007,   cacheMiss: 0.22,  output: 0.66  },
+      { model: 'deepseek-v4-flash', tier: 'peak',     cacheHit: 0.014,   cacheMiss: 0.44,  output: 1.32  },
+      { model: 'deepseek-v4-pro',   tier: 'current',  cacheHit: 0.003625, cacheMiss: 0.435, output: 0.87 },
+      { model: 'deepseek-v4-pro',   tier: 'off-peak', cacheHit: 0.022,   cacheMiss: 0.66,  output: 1.98  },
+      { model: 'deepseek-v4-pro',   tier: 'peak',     cacheHit: 0.044,   cacheMiss: 1.32,  output: 3.96  }
+    ],
+    snapshot: 'Aug 14, 2026',
+    effective: '16:00 UTC on August 16, 2026'
+  };
+
+  var state = {
+    window: { peak: EMBEDDED.window.peak.map(function (g) { return { s: g.s, e: g.e }; }) },
+    prices: EMBEDDED.prices.map(function (p) { return Object.assign({}, p); }),
+    effective: EMBEDDED.effective,
+    source: 'embedded',
+    fetchedAt: null
+  };
+
+  // ---------------------------------------------------------------- helpers
+  var money = new Intl.NumberFormat('en-US', {
+    style: 'currency', currency: 'USD',
+    minimumFractionDigits: 2, maximumFractionDigits: 6
+  });
+  var fmtLocalTime = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit', minute: '2-digit', hour12: false, hourCycle: 'h23'
+  });
+  var fmtLocalDate = new Intl.DateTimeFormat(undefined, {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  });
+  var tzLabel = (function () {
+    var parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+      .formatToParts(new Date());
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].type === 'timeZoneName') return parts[i].value;
+    }
+    return '';
+  })();
+  document.getElementById('tzLabel').textContent = 'shown in ' + tzLabel;
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function fmtHHMM(min) { return pad2(Math.floor(min / 60)) + ':' + pad2(min % 60); }
+  function toMinutes(hhmm) {
+    var m = /^(\d{1,2}):(\d{2})$/.exec(hhmm);
+    if (!m) return null;
+    var h = +m[1], min = +m[2];
+    if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+    return h * 60 + min;
+  }
+  function fmtDur(totalSec) {
+    var h = Math.floor(totalSec / 3600);
+    var m = Math.floor((totalSec % 3600) / 60);
+    var s = totalSec % 60;
+    return h + 'h ' + pad2(m) + 'm ' + pad2(s) + 's';
+  }
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  // Base = UTC midnight of "today", so window edges become real Date objects.
+  function utcBase(now) {
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  }
+  function localAt(utcMin, base) { return new Date(base + utcMin * 60000); }
+
+  // Split a [start,end) range that may cross midnight; merge+sorted normalize.
+  function toSegments(s, e) {
+    if (e > s) return [{ s: s, e: e }];
+    return [{ s: s, e: 1440 }, { s: 0, e: e }];
+  }
+  function normalize(ranges) {
+    var segs = [];
+    ranges.forEach(function (r) { segs = segs.concat(toSegments(r.s, r.e)); });
+    segs.sort(function (a, b) { return a.s - b.s; });
+    var out = [];
+    segs.forEach(function (g) {
+      if (out.length && g.s <= out[out.length - 1].e) {
+        out[out.length - 1].e = Math.max(out[out.length - 1].e, g.e);
+      } else {
+        out.push({ s: g.s, e: g.e });
+      }
+    });
+    return out;
+  }
+  function complement(segs) {
+    var out = [], prev = 0;
+    segs.forEach(function (g) {
+      if (g.s > prev) out.push({ s: prev, e: g.s });
+      prev = Math.max(prev, g.e);
+    });
+    if (prev < 1440) out.push({ s: prev, e: 1440 });
+    return out;
+  }
+
+  // ---------------------------------------------------------------- compute
+  function compute(now) {
+    var base = utcBase(now);
+    var min = now.getUTCHours() * 60 + now.getUTCMinutes();
+    var peak = state.window.peak;
+
+    var inPeak = peak.some(function (g) { return min >= g.s && min < g.e; });
+    var offPeak = !inPeak;
+
+    // nearest upcoming window edge (start -> peak begins, end -> off-peak begins)
+    var next = null;
+    peak.forEach(function (g) {
+      [{ min: g.s, label: 'peak starts' }, { min: g.e, label: 'off-peak starts' }]
+        .forEach(function (ed) {
+          var cand = min < ed.min ? ed.min : ed.min + 1440;
+          if (!next || cand < next.min) next = { min: cand, label: ed.label };
+        });
+    });
+    var secsLeft = (next.min - min) * 60 - now.getUTCSeconds();
+
+    return { base: base, min: min, peak: peak, offPeak: offPeak, next: next, secsLeft: secsLeft };
+  }
+
+  // ---------------------------------------------------------------- render
+  function utcRange(s, e) {
+    return fmtHHMM(s) + ' \u2013 ' + (e === 1440 ? '24:00' : fmtHHMM(e)) + ' UTC';
+  }
+  function formatSegLine(s, e, base) {
+    var start = localAt(s, base);
+    var end = localAt(e, base);
+    var plus = start.toDateString() !== end.toDateString() ? ' (+1 day)' : '';
+    return fmtLocalTime.format(start) + ' \u2013 ' + fmtLocalTime.format(end) + plus + ' ' + tzLabel;
+  }
+  function windowRow(tagClass, tag, utc, local) {
+    return '<div class="row">' +
+      '<span class="tag ' + tagClass + '">' + tag + '</span>' +
+      '<span class="muted small">' + utc + '</span>' +
+      '<span class="range">' + local + '</span>' +
+      '</div>';
+  }
+
+  var TIER_LABEL = { current: 'Current', 'off-peak': 'Off-peak', peak: 'Peak' };
+  var TIER_ORDER = { current: 0, 'off-peak': 1, peak: 2 };
+
+  function render() {
+    var now = new Date();
+    var c = compute(now);
+
+    // ---- status card
+    var dot = document.getElementById('statusDot');
+    var title = document.getElementById('statusTitle');
+    var sub = document.getElementById('statusSub');
+    dot.className = 'status-dot ' + (c.offPeak ? 'offpeak' : 'peak');
+    if (c.offPeak) {
+      title.textContent = 'Off-peak \u2014 50% discount active';
+      sub.textContent = 'Off-peak rates apply now (half of peak rates).';
+    } else {
+      title.textContent = 'Peak \u2014 standard pricing';
+      sub.textContent = 'Peak rates apply now; off-peak rates are 50% off.';
+    }
+
+    // ---- clock / countdown
+    document.getElementById('clock').textContent =
+      pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + ':' + pad2(now.getSeconds());
+    document.getElementById('dateLine').textContent = fmtLocalDate.format(now);
+    document.getElementById('utcLine').textContent = 'UTC: ' + now.toUTCString();
+    document.getElementById('countdown').textContent = fmtDur(c.secsLeft);
+    document.getElementById('nextSwitch').textContent =
+      'Next switch: ' + c.next.label + ' \u00b7 ' +
+      fmtLocalTime.format(localAt(c.next.min, c.base)) + ' ' + tzLabel;
+
+    // ---- windows (UTC + local)
+    var offPeakSegs = complement(c.peak);
+    var html = '';
+    c.peak.forEach(function (g) {
+      html += windowRow('peak', 'Peak (standard)', utcRange(g.s, g.e), formatSegLine(g.s, g.e, c.base));
+    });
+    offPeakSegs.forEach(function (g) {
+      html += windowRow('offpeak', 'Off-peak (50% off)', utcRange(g.s, g.e), formatSegLine(g.s, g.e, c.base));
+    });
+    document.getElementById('windows').innerHTML = html;
+
+    // ---- price table (grouped by model, tiers in fixed order)
+    var byModel = [], map = {};
+    state.prices.forEach(function (p) {
+      if (!map[p.model]) { map[p.model] = { model: p.model, tiers: [] }; byModel.push(map[p.model]); }
+      map[p.model].tiers.push({ tier: p.tier || 'current', hit: p.cacheHit, miss: p.cacheMiss, out: p.output });
+    });
+    byModel.forEach(function (g) {
+      g.tiers.sort(function (a, b) {
+        return (TIER_ORDER[a.tier] !== undefined ? TIER_ORDER[a.tier] : 9) -
+               (TIER_ORDER[b.tier] !== undefined ? TIER_ORDER[b.tier] : 9);
+      });
+    });
+    var rows = '';
+    byModel.forEach(function (g) {
+      g.tiers.forEach(function (t, i) {
+        rows += '<tr class="' + esc(t.tier) + '">' +
+          (i === 0 ? '<td class="model" rowspan="' + g.tiers.length + '">' + esc(g.model) + '</td>' : '') +
+          '<td class="tier ' + esc(t.tier) + '">' + esc(TIER_LABEL[t.tier] || t.tier) + '</td>' +
+          '<td>' + money.format(t.hit) + '</td>' +
+          '<td>' + money.format(t.miss) + '</td>' +
+          '<td>' + money.format(t.out) + '</td>' +
+          '</tr>';
+      });
+    });
+    document.getElementById('priceBody').innerHTML = rows;
+    document.getElementById('priceNote').textContent =
+      'USD per 1M tokens. Off-peak rates are 50% of peak rates. Peak/off-peak pricing takes effect ' +
+      state.effective + '.';
+
+    // ---- source badge / footer
+    var badge = document.getElementById('sourceBadge');
+    var footerSource = document.getElementById('footerSource');
+    if (state.source === 'live') {
+      var t = state.fetchedAt;
+      badge.textContent = 'Live from api-docs.deepseek.com';
+      badge.className = 'badge live';
+      footerSource.textContent = 'live copy of the pricing page (fetched ' +
+        pad2(t.getHours()) + ':' + pad2(t.getMinutes()) + ':' + pad2(t.getSeconds()) + ' ' + tzLabel + ')';
+    } else {
+      badge.textContent = 'Embedded snapshot';
+      badge.className = 'badge';
+      footerSource.textContent = 'embedded snapshot (as of ' + EMBEDDED.snapshot +
+        ' \u2014 point-in-time copy; click "Refresh live data" to pull the current page)';
+    }
+  }
+
+  // ---------------------------------------------------------------- live refresh
+  function parseWindow(text) {
+    // Current format: "Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC (all other hours are off-peak)."
+    var m = text.match(/peak hours are\s+([\s\S]{0,120}?)\s*UTC/i);
+    if (m) {
+      var ranges = [], ok = true;
+      var re = /(\d{1,2}):(\d{2})\s*[-\u2013\u2014]\s*(\d{1,2}):(\d{2})/g;
+      var mm;
+      while ((mm = re.exec(m[1])) !== null) {
+        var s = toMinutes(pad2(+mm[1]) + ':' + pad2(+mm[2]));
+        var e = toMinutes(pad2(+mm[3]) + ':' + pad2(+mm[4]));
+        if (s === null || e === null) { ok = false; break; }
+        ranges.push({ s: s, e: e });
+      }
+      if (ok && ranges.length) return { peak: normalize(ranges) };
+      console.warn('[deepseek-assistant] Invalid peak-hours window on live page');
+    }
+    // Legacy format: "off-peak hours (UTC 16:30-00:30)" -> off-peak window; peak = complement.
+    var m2 = text.match(/off-?peak hours[^)]*?UTC\s*(\d{1,2}):(\d{2})\s*[-\u2013\u2014]\s*(\d{1,2}):(\d{2})/i);
+    if (m2) {
+      var s2 = toMinutes(pad2(+m2[1]) + ':' + pad2(+m2[2]));
+      var e2 = toMinutes(pad2(+m2[3]) + ':' + pad2(+m2[4]));
+      if (s2 !== null && e2 !== null) return { peak: complement(toSegments(s2, e2)) };
+    }
+    console.warn('[deepseek-assistant] No peak/off-peak window found on live page');
+    return null;
+  }
+
+  function parsePrices(doc) {
+    // returns [{t: text, col: rendered column index}] honoring colSpan AND
+    // rowSpan (cells from previous rows occupying leading columns).
+    // activeSpans: shared per-table map {col: rowsRemaining}, mutated in place.
+    function cellInfos(tr, activeSpans) {
+      var occupied = {};
+      for (var c in activeSpans) { if (activeSpans[c] > 0) occupied[+c] = true; }
+      var out = [];
+      var col = 0;
+      var cells = tr.querySelectorAll('th,td');
+      for (var i = 0; i < cells.length; i++) {
+        while (occupied[col]) col++;
+        var span = cells[i].colSpan || 1;
+        var rspan = cells[i].rowSpan || 1;
+        out.push({ t: cells[i].innerText.trim(), col: col });
+        if (rspan > 1) activeSpans[col] = rspan;
+        col += span;
+      }
+      for (var k in activeSpans) {
+        activeSpans[k]--;
+        if (activeSpans[k] <= 0) delete activeSpans[k];
+      }
+      return out;
+    }
+    function isPrice(c) { return /^\s*\$\s*\d/.test(c); }
+    function numOf(c) {
+      var m = c.match(/\d+(?:\.\d+)?/);
+      return m ? parseFloat(m[0]) : null;
+    }
+    function rowRole(low) {
+      for (var i = 0; i < low.length; i++) {
+        if (low[i].indexOf('cache hit') !== -1) return 'hit';
+        if (low[i].indexOf('cache miss') !== -1) return 'miss';
+      }
+      for (var j = 0; j < low.length; j++) {
+        if (/output/.test(low[j])) return 'out';
+      }
+      return null;
+    }
+
+    var out = [];
+    var tables = doc.querySelectorAll('table');
+    for (var t = 0; t < tables.length; t++) {
+      var rows = tables[t].querySelectorAll('tr');
+      var roleCols = {};   // role -> column index (normal orientation)
+      var modelCols = {};  // model name -> column index (transposed orientation)
+      var hasRoleHeader = false;
+
+      // pass 1: locate header rows (>=2 role keywords, or >=2 model names)
+      var activeSpans = {};
+      for (var r = 0; r < rows.length; r++) {
+        var infos = cellInfos(rows[r], activeSpans);
+        var cells = infos.map(function (i) { return i.t; });
+        var low = cells.map(function (c) { return c.toLowerCase(); });
+        var roleHits = 0;
+        low.forEach(function (c) {
+          if (c.indexOf('cache hit') !== -1 || c.indexOf('cache miss') !== -1 || /output/.test(c)) roleHits++;
+        });
+        if (roleHits >= 2) {
+          infos.forEach(function (info) {
+            if (info.t.toLowerCase().indexOf('cache hit') !== -1) roleCols.hit = info.col;
+            if (info.t.toLowerCase().indexOf('cache miss') !== -1) roleCols.miss = info.col;
+            if (/output/i.test(info.t)) roleCols.out = info.col;
+          });
+          hasRoleHeader = true;
+          continue;
+        }
+        var modelHits = 0;
+        low.forEach(function (c) { if (/deepseek/.test(c)) modelHits++; });
+        // transposed tables put model names in the FIRST row only
+        // (e.g. "MODEL | deepseek-v4-flash | deepseek-v4-pro"); later rows
+        // such as MODEL VERSION must not overwrite this mapping.
+        if (r === 0 && modelHits >= 2) {
+          infos.forEach(function (info) { if (/deepseek/i.test(info.t)) modelCols[info.t] = info.col; });
+        }
+      }
+
+      // pass 2: extract rows
+      var activeSpans2 = {};
+      var transposed = {}; // model -> {hit, miss, out} for transposed tables
+      var currentModel = null; // handles rowspan model cells across rows
+      var seen = {}; // dedupe key -> true
+      function emit(model, tier, vals) {
+        var key = model + '\u0000' + tier;
+        if (seen[key]) return;
+        seen[key] = true;
+        out.push({ model: model, tier: tier, cacheHit: vals.hit, cacheMiss: vals.miss, output: vals.out });
+      }
+      for (var r2 = 0; r2 < rows.length; r2++) {
+        var infos2 = cellInfos(rows[r2], activeSpans2);
+        var cells2 = infos2.map(function (i) { return i.t; });
+        var low2 = cells2.map(function (c) { return c.toLowerCase(); });
+        var role = rowRole(low2);
+        if (/deepseek/i.test(cells2[0])) {
+          currentModel = cells2[0].replace(/\s*(off-?peak|peak)\s*$/i, '').trim();
+        }
+
+        // case B: transposed pricing row, e.g. "... | CACHE HIT | $0.0028 | $0.003625"
+        if (role && Object.keys(modelCols).length >= 2) {
+          Object.keys(modelCols).forEach(function (mk) {
+            var info = null;
+            for (var ci = 0; ci < infos2.length; ci++) {
+              if (infos2[ci].col === modelCols[mk]) { info = infos2[ci]; break; }
+            }
+            if (info && isPrice(info.t)) {
+              if (!transposed[mk]) transposed[mk] = {};
+              transposed[mk][role] = numOf(info.t);
+            }
+          });
+          continue;
+        }
+
+        // case A: model row with >=3 price cells, e.g. "model | OFF-PEAK | $0.007 | ..."
+        if (!currentModel) continue;
+        var priceCells = cells2.filter(isPrice);
+        if (priceCells.length < 3) continue;
+        // roles in header column order, then map price cells left-to-right
+        var roles = [];
+        if (hasRoleHeader) {
+          ['hit', 'miss', 'out'].forEach(function (k) {
+            if (roleCols[k] !== undefined) roles.push([k, roleCols[k]]);
+          });
+          roles.sort(function (a, b) { return a[1] - b[1]; });
+          roles = roles.map(function (x) { return x[0]; });
+        } else {
+          roles = ['hit', 'miss', 'out'];
+        }
+        var vals = {};
+        roles.forEach(function (k, i) { if (priceCells[i] !== undefined) vals[k] = numOf(priceCells[i]); });
+        if (vals.hit === undefined || vals.miss === undefined || vals.out === undefined) continue;
+
+        var tier = null;
+        low2.forEach(function (c) { if (/off-?peak/.test(c)) tier = 'off-peak'; });
+        if (!tier) low2.forEach(function (c) { if (/(^|\s)peak(\s|$)/.test(c)) tier = 'peak'; });
+        if (!tier) tier = 'current';
+        emit(currentModel, tier, vals);
+      }
+
+      // assemble transposed rows into per-model entries
+      Object.keys(transposed).forEach(function (mk) {
+        var v = transposed[mk];
+        if (v.hit !== undefined && v.miss !== undefined && v.out !== undefined) {
+          emit(mk, 'current', v);
+        }
+      });
+    }
+    return out;
+  }
+
+  function parsePricingPage(html) {
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    var text = (doc.body ? doc.body.innerText : html);
+    var result = {};
+    var w = parseWindow(text);
+    if (w) result.window = w;
+    var prices = parsePrices(doc);
+    if (prices.length) result.prices = prices;
+    else console.warn('[deepseek-assistant] No prices parsed from live page');
+    var m = text.match(/take effect[^.]*?(\d{1,2}:\d{2})\s*UTC[^.]*?([A-Z][a-z]+ \d{1,2}, \d{4})/i);
+    if (m) result.effective = m[1] + ' UTC on ' + m[2];
+    return result;
+  }
+
+  var refreshBtn = document.getElementById('refreshBtn');
+  var toastTimer = null;
+  function toast(msg) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.hidden = false;
+    void el.offsetWidth; // restart transition
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      el.classList.remove('show');
+      setTimeout(function () { el.hidden = true; }, 300);
+    }, 4500);
+  }
+
+  refreshBtn.addEventListener('click', function () {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = '\u23F3 Fetching\u2026';
+    fetch(PRICING_URL, { headers: { 'Accept': 'text/html' } })
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.text();
+      })
+      .then(function (html) {
+        var parsed = parsePricingPage(html);
+        if (parsed.window) state.window = parsed.window;
+        if (parsed.prices) state.prices = parsed.prices;
+        if (parsed.effective) state.effective = parsed.effective;
+        state.source = 'live';
+        state.fetchedAt = new Date();
+        render();
+        toast('Live data loaded from api-docs.deepseek.com');
+      })
+      .catch(function (err) {
+        console.warn('[deepseek-assistant] Live refresh failed:', err);
+        toast('Live fetch blocked (CORS/network) \u2014 using embedded data');
+      })
+      .finally(function () {
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = '\u27F3 Refresh live data';
+      });
+  });
+
+  // ------------------------------------------------------------------ init
+  render();
+  setInterval(render, 1000);
+})();
+</script>
+</body>
+</html>
